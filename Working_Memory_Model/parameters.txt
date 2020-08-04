@@ -1,9 +1,16 @@
 {
 'seed':3, #for the simulator build process
+<<<<<<< HEAD
+'n_trials': 10,
+'n_processes':16,
+'dt':0.001, #timestep
+'dt_sample':0.001, #timestep for data recording through probes
+=======
 'n_trials':20,
 'n_processes':16,
 'dt':0.001, #timestep
 'dt_sample':0.01, #timestep for data recording through probes
+>>>>>>> b3a3ae3ee5fe2648dc24deac6d5c6c90fc4496f6
 't_cue':1.0, #duration of cue presentation
 't_delay':8.0, #duration of delay period between cue and decision
 'misperceive':0.1, #chance of failing to perceive the cue, causing no info to go into WM
@@ -18,7 +25,11 @@
 'noise_wm':0.005, #std of full-spectrum white noise inject into wm.neurons
 'noise_decision':0.3, #std of added gaussian noise in the default decision procedure; 
 
+<<<<<<< HEAD
+'decision_type':'basal_ganglia', #decision procedure: 'default', 'basal_ganglia'
+=======
 'decision_type':'default', #decision procedure: 'default', 'basal_ganglia'
+>>>>>>> b3a3ae3ee5fe2648dc24deac6d5c6c90fc4496f6
 'drug_type':'biophysical', #drug simulation: 'neural','functional','biophysical'				
 'drugs':['Regular'], #names of the of drugs to simulate, see dicts below
 'drug_effect_neural':{'Regular':0.0}, #mean of cue onto wm.neurons
