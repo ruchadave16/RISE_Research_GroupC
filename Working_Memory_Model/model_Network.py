@@ -17,7 +17,9 @@ from nengo.rc import rc
 from nengo.dists import Choice, Exponential, Uniform
 from pathos.helpers import freeze_support 
 from nengo.utils.matplotlib import rasterplot
-import nengo_extras
+#from nengo_extras import CollapsingGexfConverter
+from nengo_extras.plot_spikes import (cluster, merge, plot_spikes, preprocess_spikes, sample_by_variance)
+
 
 class working_memory_model():
     def __init__(self):
@@ -25,6 +27,11 @@ class working_memory_model():
         print 'Importing model parameters from parameters.txt'
         self.P = eval(open('parameters.txt').read())
         self.seed = self.P['seed']
+        self.rng = np.random.RandomState(seed = self.seed)
+        self.net_seed = self.rng.randint(100)
+        self.ens_seed = self.rng.randint(100)
+        self.con_seed = self.rng.randint(100)
+        self.sim_seed = self.rng.randint(100)
         self.n_trials = self.P['n_trials']
         self.n_processes = self.P['n_processes']
         self.drug_type = str(self.P['drug_type'])
@@ -34,14 +41,11 @@ class working_memory_model():
         self.P['timesteps'] = np.arange(0,int((self.P['t_cue']+ self.P['t_delay'])/self.P['dt_sample']))
         self.P['cues'] = self.cues
         self.P['perceived'] = self.perceived
-        self.spiking_array = 0
+        self.spiking_array = []
         self.accuracy_data = []
         self.neuron_type = nengo.LIF()
-        self.memory_threshhold = .025
+        self.memory_threshhold = 0
 
-
-
-    
     def noise_bias_function(self,t):
 		if self.drug_type=='neural':
 			return np.random.normal(self.drug_effect_neural[self.drug],self.noise_wm)
@@ -99,7 +103,6 @@ class working_memory_model():
 		return rescaled
     
     def f_dec(self,x):
-        # if "dec" is above threshold and in the correct direction, output 1, else 0
         value = x[0]
         if value > self.memory_threshhold and self.cue > 0:
             return 1
@@ -143,76 +146,77 @@ class working_memory_model():
         
         if self.trial == 0:
             print 'Building model...'
-        with nengo.Network(seed = self.seed + self.trial) as model:
+        with nengo.Network(seed = self.net_seed) as model:
 
             if self.trial == 0: print 'Creating Ensembles...'
             
-            cue = nengo.Node(output = self.cue_function)
-            time = nengo.Node(output = self.time_function)
-            inputs = nengo.Ensemble(self.neurons_inputs, 2)
-            noise_wm_node = nengo.Node(output = self.noise_bias_function)
-            noise_decision_node = nengo.Node(output = self.noise_decision_function)
-            wm = nengo.Ensemble(self.neurons_wm, 2, neuron_type = self.neuron_type)
-            cor = nengo.Ensemble(1, 1, neuron_type = nengo.Direct(), seed = self.seed)
+            cue = nengo.Node(output = self.cue_function, label = 'Cue')
+            time = nengo.Node(output = self.time_function, label = 'Time')
+            inputs = nengo.Ensemble(self.neurons_inputs, 2, seed = self.ens_seed, label = 'Input Neurons')
+            noise_wm_node = nengo.Node(output = self.noise_bias_function, label = 'Noise injection (WM node)')
+            noise_decision_node = nengo.Node(output = self.noise_decision_function, label = 'Noise injection (decision node)')
+            wm = nengo.Ensemble(self.neurons_wm, 2, neuron_type = self.neuron_type,seed = self.ens_seed, label = 'Working Memory')
+            cor = nengo.Ensemble(1, 1, neuron_type = nengo.Direct(),seed = self.ens_seed, label = 'Accuracy sensor')
 
             
             if self.decision_type == 'default':
-                decision = nengo.Ensemble(self.neurons_decide, 2)
+                decision = nengo.Ensemble(self.neurons_decide, 2, seed = self.ens_seed, label = 'Decision Maker')
                 
             elif self.decision_type == 'basal_ganglia':
-                utilities = nengo.networks.EnsembleArray(self.neurons_inputs, n_ensembles = 2)
+                utilities = nengo.networks.EnsembleArray(self.neurons_inputs, n_ensembles = 2, seed = self.ens_seed, label = 'Utility network')
                 BasalGanglia = nengo.networks.BasalGanglia(2, self.neurons_decide)
-                decision = nengo.networks.EnsembleArray(self.neurons_decide, n_ensembles = 2, intercepts = Uniform(0.2, 1), encoders = Uniform(1,1))
-                temp = nengo.Ensemble(self.neurons_decide, 2,neuron_type = self.neuron_type)
-                bias = nengo.Node([1] * 2)
-            output = nengo.Ensemble(self.neurons_decide, 1, neuron_type = self.neuron_type)
+                decision = nengo.networks.EnsembleArray(self.neurons_decide, n_ensembles = 2, intercepts = Uniform(0.2, 1), encoders = Uniform(1,1), seed = self.ens_seed, label = 'Decision ensemble (Basal Ganglia')
+                temp = nengo.Ensemble(self.neurons_decide, 2,neuron_type = self.neuron_type, seed = self.ens_seed)
+                bias = nengo.Node([1] * 2, label = 'bias node')
+            output = nengo.Ensemble(self.neurons_decide, 1, neuron_type = self.neuron_type, seed = self.ens_seed, label = 'Output')
             
             if self.trial == 0: print 'Buildiing Connections...'
             
-            nengo.Connection(cue, inputs[0], synapse = None)
-            nengo.Connection(time, inputs[1], synapse = None)
-            nengo.Connection(inputs, wm, synapse = self.tau_wm, function=self.inputs_function)
-            wm_recurrent=nengo.Connection(wm, wm, synapse = self.tau_wm, function = self.wm_recurrent_function)
-            nengo.Connection(noise_wm_node, wm.neurons, synapse = self.tau_wm, transform = np.ones((self.neurons_wm,1))*self.tau_wm)
+            nengo.Connection(cue, inputs[0], synapse = None, seed = self.con_seed)
+            nengo.Connection(time, inputs[1], synapse = None, seed = self.con_seed)
+            nengo.Connection(inputs, wm, synapse = self.tau_wm, function=self.inputs_function, seed = self.con_seed)
+            wm_recurrent=nengo.Connection(wm, wm, synapse = self.tau_wm, function = self.wm_recurrent_function, seed = self.con_seed)
+            nengo.Connection(noise_wm_node, wm.neurons, synapse = self.tau_wm, transform = np.ones((self.neurons_wm,1))*self.tau_wm, seed = self.con_seed)
             if self.decision_type == 'default':
-                wm_to_decision = nengo.Connection(wm[0], decision[0], synapse = self.tau)
-                nengo.Connection(noise_decision_node, decision[1], synapse=None)
-                nengo.Connection(decision, output,function = self.decision_function)
-                nengo.Connection(decision, cor, synapse = self.tau,function = self.f_dec)
+                wm_to_decision = nengo.Connection(wm[0], decision[0], synapse = self.tau, seed = self.con_seed)
+                nengo.Connection(noise_decision_node, decision[1], synapse = None, seed = self.con_seed)
+                nengo.Connection(decision, output,function = self.decision_function, seed = self.con_seed)
+                nengo.Connection(decision, cor, synapse = self.tau,function = self.f_dec, seed = self.con_seed)
 
                 
             elif self.decision_type == 'basal_ganglia':
-                wm_to_decision = nengo.Connection(wm[0], utilities.input, synapse = self.tau, function = self.BG_rescale)
-                nengo.Connection(BasalGanglia.output, decision.input, synapse = self.tau)
-                nengo.Connection(noise_decision_node, BasalGanglia.input,synapse = None) #added external noise?
-                nengo.Connection(bias, decision.input, synapse = self.tau)
-                nengo.Connection(decision.input, decision.output, transform=(np.eye(2)-1), synapse=self.tau/2.0)
-                nengo.Connection(decision.output,temp)
-                nengo.Connection(temp,output,function = self.decision_function)
-                nengo.Connection(temp, cor, synapse = self.tau,function = self.f_dec)
+                wm_to_decision = nengo.Connection(wm[0], utilities.input, synapse = self.tau, function = self.BG_rescale, seed = self.con_seed)
+                nengo.Connection(BasalGanglia.output, decision.input, synapse = self.tau, seed = self.con_seed)
+                nengo.Connection(noise_decision_node, BasalGanglia.input,synapse = None, seed = self.con_seed) #added external noise?
+                nengo.Connection(bias, decision.input, synapse = self.tau, seed = self.con_seed)
+                nengo.Connection(decision.input, decision.output, transform=(np.eye(2)-1), synapse = self.tau/2.0, seed = self.con_seed)
+                nengo.Connection(decision.output,temp, seed = self.con_seed)
+                nengo.Connection(temp,output,function = self.decision_function, seed = self.con_seed)
+                nengo.Connection(temp, cor, synapse = self.tau,function = self.f_dec, seed = self.con_seed)
             
             if self.trial == 0: print 'Building Probes...'
             probe_wm = nengo.Probe(wm[0],synapse = 0.01, sample_every = self.dt_sample)
             probe_spikes = nengo.Probe(wm.neurons, 'spikes', sample_every = self.dt_sample)
             probe_output = nengo.Probe(output,synapse=None, sample_every = self.dt_sample)
             p_cor = nengo.Probe(cor, synapse=None, sample_every = self.dt_sample)
+            #data_dir = ch_dir()
+            #CollapsingGexfConverter().convert(model).write('model.gexf')
+
+
         
         print 'Running trial %s...' %(self.trial+1)
-        with nengo.Simulator(model,dt = self.dt) as sim:
+        with nengo.Simulator(model,dt = self.dt, seed = self.sim_seed) as sim:
             if self.drug_type == 'biophysical': 
                 sim = reset_gain_bias(self.P, model, sim, wm, wm_recurrent, wm_to_decision, self.drug)
                 
             sim.run(self.t_cue + self.t_delay)
-            #xyz = sim.data[probe_spikes]
+            xyz = sim.data[probe_spikes]
             abc = np.abs(sim.data[p_cor])
-            #abc.append(xyz)
             df_primary = primary_dataframe(self.P, sim, self.drug,self.trial, probe_wm, probe_output)
             df_firing = firing_dataframe(self.P,sim,self.drug,self.trial, sim.data[wm], probe_spikes)
             
-        return [df_primary, df_firing, abc]
+        return [df_primary, df_firing, abc, xyz]
                 
-                
-        
     def multiprocessing(self):
         
         print "decision_type=%s, trials=%s..." %(self.decision_type,self.n_trials)
@@ -230,6 +234,11 @@ class working_memory_model():
             self.accuracy_data.append(self.df_list[i][2])
             
         self.accuracy_data = np.array(self.accuracy_data)
+        
+        for i in range(len(self.df_list)):
+            self.spiking_array.append((self.df_list[i][3]))
+        self.spiking_array = np.array(self.spiking_array)
+        
         print 'Constructing Dataframes...'
         primary_dataframe = pd.concat([self.df_list[i][0] for i in range(len(self.df_list))], ignore_index=True)
         firing_dataframe = pd.concat([self.df_list[i][1] for i in range(len(self.df_list))], ignore_index=True)
@@ -249,7 +258,7 @@ class working_memory_model():
         columns = ('trial', 'drug', 'time', datatype)
         df = pd.DataFrame(columns=columns)
         for trial in range(n_trials):
-            print 'adding trial %s, drug %s to %s...' %(trial, drug, datatype)
+            print 'Adding trial %s, to %s...' %(trial + 1, datatype)
             df_time = []
             for t in range(n_timesteps):
                 df_temp = pd.DataFrame(
@@ -261,29 +270,6 @@ class working_memory_model():
             del df_time
         return df
 
-    
-    def obj_conn_diagram(self,objs, connections):
-        text = []
-        text.append('digraph G {')
-        for obj in objs:
-            text.append('  "%d" [label="%s"];' % (id(obj), obj.label))
-    
-        def label(transform):
-            # determine the label for a connection based on its transform
-            transform = np.asarray(transform)
-            if len(transform.shape) == 0:
-                return ''
-            return '%dx%d' % transform.shape
-    
-        for c in connections:
-            text.append('  "%d" -> "%d" [label="%s"];' % (
-                id(c.pre_obj), id(c.post_obj), label(c.transform)))
-        text.append('}')
-        return '\n'.join(text)
-    
-    def net_diagram(self,net):
-        objs = net.all_nodes + net.all_ensembles
-        return self.obj_conn_diagram(objs, net.all_connections)
         
     def plot_data(self, primary_dataframe, firing_dataframe, ):
         print 'Plotting Data...'
@@ -298,14 +284,18 @@ class working_memory_model():
         spike_sum = np.sum(spikes,axis=0)
         indices = np.argsort(spike_sum)[::-1]
         top_spikes=spikes[:,indices[0:50]]
+        
         b = rasterplot(self.spiking_array[1], top_spikes, use_eventplot = True)
         b = plt.gca()
         b.invert_yaxis()
         b.set(xlabel = 'time (s)', ylabel = 'neuron \nactivity $a_i(t)$')
+        plt.show(b)
+        b = plot_spikes(preprocess_spikes(firing_dataframe['time'],top_spikes))
+        b.xlabel("Time [s]")
+        b.ylabel("Neuron number")
         plt.show(b)'''
-        
 
-        
+
         print 'Plotting Data...'
         
     	figure2, (ax3, ax4) = plt.subplots(1, 2)
@@ -338,8 +328,6 @@ class working_memory_model():
 
 n = working_memory_model()
 n.go()
-
-
 
 
 
