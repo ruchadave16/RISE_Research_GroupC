@@ -1,7 +1,7 @@
 {
 'seed':3, #for the simulator build process
 'n_trials': 12,
-'n_processes':16,
+'n_processes':14,
 'dt':0.001, #timestep
 'dt_sample':0.01, #timestep for data recording through probes
 't_cue':1.0, #duration of cue presentation
