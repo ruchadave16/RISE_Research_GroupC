@@ -74,10 +74,10 @@ def reset_gain_bias(P,model,sim,wm,wm_recurrent,wm_to_decision,drug):
 	return sim
 
 '''dataframe initialization'''
-def primary_dataframe(P,sim,drug,trial,probe_wm,probe_output):
+def primary_dataframe(P,sim,drug,trial,probe_wm,probe_output, day):
 	import numpy as np
 	import pandas as pd
-	columns=('time','drug','wm','output','correct','trial') 
+	columns=('time','drug','wm','output','correct','trial','day') 
 	df_primary = pd.DataFrame(columns=columns, index=np.arange(0,len(P['timesteps'])))
 	i=0
 	for t in P['timesteps']:
@@ -85,14 +85,14 @@ def primary_dataframe(P,sim,drug,trial,probe_wm,probe_output):
 		output_val=sim.data[probe_output][t][0]
 		correct=get_correct(P['cues'][trial],output_val)
 		rt=t*P['dt_sample']
-		df_primary.loc[i]=[rt,drug,wm_val,output_val,correct,trial]
+		df_primary.loc[i]=[rt,drug,wm_val,output_val,correct,trial, day]
 		i+=1
 	return df_primary
 
-def firing_dataframe(P,sim,drug,trial,sim_wm,probe_spikes):
+def firing_dataframe(P,sim,drug,trial,sim_wm,probe_spikes, day):
 	import numpy as np
 	import pandas as pd
-	columns=('time','drug','neuron-trial','tuning','firing_rate')
+	columns=('time','drug','neuron-trial','tuning','firing_rate', 'day')
 	df_firing = pd.DataFrame(columns=columns, index=np.arange(0,len(P['timesteps'])*\
 		int(P['neurons_wm']*P['frac'])))
 	t_width = 0.2
@@ -107,7 +107,7 @@ def firing_dataframe(P,sim,drug,trial,sim_wm,probe_spikes):
 		firing_rate = np.convolve(spikes,h,mode='same')
 		for t in P['timesteps']:
 			rt=t*P['dt_sample']
-			df_firing.loc[j]=[rt,drug,nrn+trial*P['neurons_wm'],tuning,firing_rate[t]]
+			df_firing.loc[j]=[rt,drug,nrn+trial*P['neurons_wm'],tuning,firing_rate[t], day]
 			j+=1
 		# print 'appending dataframe for neuron %s' %f
 	return df_firing
