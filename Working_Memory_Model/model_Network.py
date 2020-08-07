@@ -19,19 +19,26 @@ from pathos.helpers import freeze_support
 from nengo.utils.matplotlib import rasterplot
 #from nengo_extras import CollapsingGexfConverter
 from nengo_extras.plot_spikes import (cluster, merge, plot_spikes, preprocess_spikes, sample_by_variance)
-
+from Ensemble_Collection import EnsembleCollection
+nengo.rc.set('progress', 'progress_bar', 'nengo.utils.progress.TerminalProgressBar')
+import scipy.stats as ss
 
 class working_memory_model():
-    def __init__(self):
+    '''
+    Proportion: The percentage of neurons in the working memory network affected by the synaptic degradation(Default = 0)
+    
+    Degradation: The degradation that should be appled to the synaptic weights (Default = 0)
+    '''
+    def __init__(self, proportion = 0, degradation = 0):
         
         print 'Importing model parameters from parameters.txt'
         self.P = eval(open('parameters.txt').read())
         self.seed = self.P['seed']
         self.rng = np.random.RandomState(seed = self.seed)
-        self.net_seed = self.rng.randint(100)
-        self.ens_seed = self.rng.randint(100)
-        self.con_seed = self.rng.randint(100)
-        self.sim_seed = self.rng.randint(100)
+        self.net_seed =  self.rng.randint(100)
+        self.ens_seed =  self.rng.randint(100)
+        self.con_seed =  self.rng.randint(100)
+        self.sim_seed =  self.rng.randint(100)
         self.n_trials = self.P['n_trials']
         self.n_processes = self.P['n_processes']
         self.drug_type = str(self.P['drug_type'])
@@ -41,10 +48,15 @@ class working_memory_model():
         self.P['timesteps'] = np.arange(0,int((self.P['t_cue']+ self.P['t_delay'])/self.P['dt_sample']))
         self.P['cues'] = self.cues
         self.P['perceived'] = self.perceived
+        self.degradation = degradation
+        self.proportion = proportion     
         self.spiking_array = []
         self.accuracy_data = []
         self.neuron_type = nengo.LIF()
         self.memory_threshhold = 0
+        self.ground_zero = 500
+        np.random.seed(self.ens_seed)
+
 
     def noise_bias_function(self,t):
 		if self.drug_type=='neural':
@@ -109,6 +121,41 @@ class working_memory_model():
         elif value < (-1 * self.memory_threshhold) and self.cue < 0:
            return 1
         return 0
+    '''
+    def stim_ensemble(self,ens, sim, bias = False):
+        n_neurons = min(int(ens.n_neurons * self.stim_proportion), ens.n_neurons)
+        idx = np.random.choice(np.arange(ens.n_neurons), replace=False, size=n_neurons)    
+        if bias:
+            bias_sig = sim.signals[sim.model.sig[ens.neurons]['bias']]
+            bias_sig.setflags(write=True)
+            bias_sig[idx] = bias_sig[idx] * self.stim_level'''
+
+       
+    def degrade_synaptic_connection(self, sim, ens):
+        weights = sim.data[self.wm_recurrent].weights / sim.data[ens].gain[:, None]
+        n_neurons = min(int(ens.n_neurons * self.proportion), ens.n_neurons)
+
+        if self.proportion > .7:
+            idx = np.random.choice(np.arange(ens.n_neurons), replace=False, size = n_neurons)
+        else:
+            x = np.arange(ens.n_neurons)
+            xU, xL = x + (.75*n_neurons), x - (.75*n_neurons)
+            #prob = ss.norm.cdf(xU, loc = self.ground_zero, scale = 3) - ss.norm.cdf(xL,loc = self.ground_zero, scale = 3)
+            prob = ss.poisson.cdf(k = xU, mu = self.ground_zero) - ss.poisson.cdf(k = xL,mu = self.ground_zero)
+            for i in prob:
+                if round(i,3) == 0:
+                    i = .001   
+            prob = prob / prob.sum() #normalize the probabilities so their sum is 1
+            idx = np.random.choice(x, size = n_neurons, p = prob, replace = False)
+            if self.trial == 0:
+                plt.hist(idx, bins = 1000)
+                plt.xlim((0,1000))
+                plt.xlabel('Neuron #')
+                plt.ylabel('Frequency')
+                plt.show()
+        if self.trial == 0: print len(idx)    
+        weights[idx] = weights[idx] * (1-self.degradation)
+        return weights
     
     def run(self, params):
         self.decision_type = params[0]
@@ -145,10 +192,18 @@ class working_memory_model():
             rc.set("decoder_cache", "enabled", "True")
         
         if self.trial == 0:
-            print 'Building model...'
+            print '\nBuilding model...'
         with nengo.Network(seed = self.net_seed) as model:
-
-            if self.trial == 0: print 'Creating Ensembles...'
+            wm = nengo.Ensemble(self.neurons_wm, 2, neuron_type = self.neuron_type,seed = self.ens_seed, label = 'Working Memory')
+            self.wm_recurrent = nengo.Connection(wm, wm, synapse = self.tau_wm, function = self.wm_recurrent_function, seed = self.con_seed, 
+                                                 solver = nengo.solvers.LstsqL2(weights=True))
+     
+        with nengo.Simulator(model,dt = self.dt, seed = self.sim_seed) as sim:
+            pass
+        weights = self.degrade_synaptic_connection(sim, wm)
+        
+        with model:            
+            if self.trial == 0: print '\nCreating Ensembles...'
             
             cue = nengo.Node(output = self.cue_function, label = 'Cue')
             time = nengo.Node(output = self.time_function, label = 'Time')
@@ -157,7 +212,6 @@ class working_memory_model():
             noise_decision_node = nengo.Node(output = self.noise_decision_function, label = 'Noise injection (decision node)')
             wm = nengo.Ensemble(self.neurons_wm, 2, neuron_type = self.neuron_type,seed = self.ens_seed, label = 'Working Memory')
             cor = nengo.Ensemble(1, 1, neuron_type = nengo.Direct(),seed = self.ens_seed, label = 'Accuracy sensor')
-
             
             if self.decision_type == 'default':
                 decision = nengo.Ensemble(self.neurons_decide, 2, seed = self.ens_seed, label = 'Decision Maker')
@@ -170,12 +224,12 @@ class working_memory_model():
                 bias = nengo.Node([1] * 2, label = 'bias node')
             output = nengo.Ensemble(self.neurons_decide, 1, neuron_type = self.neuron_type, seed = self.ens_seed, label = 'Output')
             
-            if self.trial == 0: print 'Buildiing Connections...'
+            if self.trial == 0: print '\nBuildiing Connections...'
             
             nengo.Connection(cue, inputs[0], synapse = None, seed = self.con_seed)
             nengo.Connection(time, inputs[1], synapse = None, seed = self.con_seed)
             nengo.Connection(inputs, wm, synapse = self.tau_wm, function=self.inputs_function, seed = self.con_seed)
-            wm_recurrent=nengo.Connection(wm, wm, synapse = self.tau_wm, function = self.wm_recurrent_function, seed = self.con_seed)
+            self.wm_recurrent = nengo.Connection(wm.neurons, wm.neurons, synapse = self.tau_wm, seed = self.con_seed, transform = weights)
             nengo.Connection(noise_wm_node, wm.neurons, synapse = self.tau_wm, transform = np.ones((self.neurons_wm,1))*self.tau_wm, seed = self.con_seed)
             if self.decision_type == 'default':
                 wm_to_decision = nengo.Connection(wm[0], decision[0], synapse = self.tau, seed = self.con_seed)
@@ -200,15 +254,13 @@ class working_memory_model():
             probe_output = nengo.Probe(output,synapse=None, sample_every = self.dt_sample)
             p_cor = nengo.Probe(cor, synapse=None, sample_every = self.dt_sample)
             #data_dir = ch_dir()
-            #CollapsingGexfConverter().convert(model).write('model.gexf')
+            #CollapsingGexfConverter().convert(model).write('model.gexf')                     
 
 
-        
         print 'Running trial %s...' %(self.trial+1)
         with nengo.Simulator(model,dt = self.dt, seed = self.sim_seed) as sim:
             if self.drug_type == 'biophysical': 
-                sim = reset_gain_bias(self.P, model, sim, wm, wm_recurrent, wm_to_decision, self.drug)
-                
+                sim = reset_gain_bias(self.P, model, sim, wm, self.wm_recurrent, wm_to_decision, self.drug)
             sim.run(self.t_cue + self.t_delay)
             xyz = sim.data[probe_spikes]
             abc = np.abs(sim.data[p_cor])
@@ -226,7 +278,7 @@ class working_memory_model():
         for drug in self.drugs:
             for trial in self.trials:
                 exp_params.append([self.decision_type, self.drug_type, drug, trial, self.seed, self.P])
-        
+        #self.df_list = []
         self.df_list = pool.map(self.run, exp_params)
         #for i in range(self.n_trials):self.df_list.append(self.run(exp_params[i]))
         
@@ -275,7 +327,9 @@ class working_memory_model():
         print 'Plotting Data...'
         sns.set(context = 'paper')
         a = sns.tsplot(time = 'time', value = 'wm', data = primary_dataframe, unit = 'trial', ci = 95)
-        a.set(xlabel='time (s)',ylabel='Decoded $\hat{cue}$ value',title="Decision type = %s, Number of trials = %s" %(self.decision_type,self.n_trials))
+        a.set(xlabel='time (s)',ylabel='Decoded $\hat{cue}$ value',
+              title= "Number of trials = %s Prop degraded = %s Degradation = %s" %(self.n_trials, self.proportion,self.degradation))
+        a.set(ylim = (0,1))
         plt.show(a)
 
         '''
@@ -305,7 +359,7 @@ class working_memory_model():
         if len(firing_dataframe.query("tuning=='nonpreferred'"))>0:
             sns.tsplot(time="time",value="firing_rate",unit="neuron-trial", ax=ax4,ci=95,data=firing_dataframe.query("tuning=='nonpreferred'").reset_index(), legend = False)
         
-        ax3.set(xlabel='time (s)',ylabel='Normalized Firing Rate',title='Preferred Direction')
+        ax3.set(xlabel='time (s)',ylabel='Normalized Firing Rate',title='Preferred Direction', ylim = (0,350))
         ax4.set(xlabel='time (s)',ylim=(0,250),ylabel='',title='Nonpreferred Direction')
         plt.show(figure2)
         
@@ -313,7 +367,8 @@ class working_memory_model():
         df_correct = self.array_to_pandas(self.accuracy_data, 'correct', 'control')
         self.df_correct = pd.concat([df_correct], ignore_index=True)
         c = sns.tsplot(time='time', value='correct', unit='trial', condition='drug',data = self.df_correct, ci=95, legend = False)
-        c.set(xlabel = 'time(s)', ylabel = 'DRT accuracy percentage')
+        c.set(xlabel = 'time(s)', ylabel = 'DRT accuracy percentage',title= "Number of trials = %s Prop degraded = %s Degradation = %s" %(self.n_trials, self.proportion,self.degradation))
+        c.set(ylim = (.4,1.1))
         plt.show(c)
 
       
@@ -325,11 +380,10 @@ class working_memory_model():
 
         
 
-
-n = working_memory_model()
-n.go()
-
-
+if __name__ == '__main__':
+    #n = working_memory_model(proportion = .1, degradation = 1)
+    #n.go()
+    pass
 
 
 
