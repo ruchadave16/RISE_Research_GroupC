@@ -1,16 +1,16 @@
 {
-'seed':3, #for the simulator build process
-'n_trials':12,
-'n_processes':16,
+'seed':12, #for the simulator build process
+'n_trials': 3,
+'n_processes':8,
 'dt':0.001, #timestep
 'dt_sample':0.01, #timestep for data recording through probes
 't_cue':1.0, #duration of cue presentation
-'t_delay':12.0, #duration of delay period between cue and decision
-'misperceive':0.1, #chance of failing to perceive the cue, causing no info to go into WM
+'t_delay':8.0, #duration of delay period between cue and decision
+'misperceive':0.05, #chance of failing to perceive the cue, causing no info to go into WM
 
 'neurons_inputs':100, #neurons for the inputs ensemble
 'neurons_wm':1000, #neurons for workimg memory ensemble
-'neurons_decide':100, #neurons for decision or basal ganglia
+'neurons_decide':200, #neurons for decision or basal ganglia
 'time_scale':0.4, #how fast does the 'time' dimension accumulate in WM neurons
 'cue_scale':1.0, #how strong is the cueulus from the visual system
 'tau':0.01, #synaptic time constant between ensembles
@@ -22,7 +22,7 @@
 'drug_type':'biophysical', #drug simulation: 'neural','functional','biophysical'				
 'drugs':['Regular'], #names of the of drugs to simulate, see dicts below
 'drug_effect_neural':{'Regular':0.0}, #mean of cue onto wm.neurons
-'drug_effect_biophysical':{'Regular':[1.0,1,0]}, #k_gain, k_bias
+'drug_effect_biophysical':{'Regular':[1.0,1.0]}, #k_gain, k_bias
 'drug_effect_functional':{'Regular':1.0}, #k_multiply
 
 'enc_min_cutoff':0.3, #minimum cutoff for "weak" encoders in preferred directions
@@ -30,3 +30,6 @@
 'sigma_smoothing':0.005, #gaussian smoothing applied to spike data to calculate firing rate
 'frac':0.01, #fraction of neurons in WM to add to firing rate dataframe and plot
 }
+
+
+
