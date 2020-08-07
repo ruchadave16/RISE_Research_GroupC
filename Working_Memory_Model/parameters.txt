@@ -1,11 +1,11 @@
 {
-'seed':3, #for the simulator build process
-'n_trials': 12,
-'n_processes':14,
+'seed':12, #for the simulator build process
+'n_trials': 3,
+'n_processes':8,
 'dt':0.001, #timestep
 'dt_sample':0.01, #timestep for data recording through probes
 't_cue':1.0, #duration of cue presentation
-'t_delay':14.0, #duration of delay period between cue and decision
+'t_delay':8.0, #duration of delay period between cue and decision
 'misperceive':0.05, #chance of failing to perceive the cue, causing no info to go into WM
 
 'neurons_inputs':100, #neurons for the inputs ensemble
@@ -30,3 +30,6 @@
 'sigma_smoothing':0.005, #gaussian smoothing applied to spike data to calculate firing rate
 'frac':0.01, #fraction of neurons in WM to add to firing rate dataframe and plot
 }
+
+
+
