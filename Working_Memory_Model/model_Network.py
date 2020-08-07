@@ -16,20 +16,16 @@ import nengo
 from nengo.rc import rc
 from nengo.dists import Choice, Exponential, Uniform
 from pathos.helpers import freeze_support 
-from nengo.utils.matplotlib import rasterplot
 #from nengo_extras import CollapsingGexfConverter
-from nengo_extras.plot_spikes import (cluster, merge, plot_spikes, preprocess_spikes, sample_by_variance)
-from Ensemble_Collection import EnsembleCollection
-nengo.rc.set('progress', 'progress_bar', 'nengo.utils.progress.TerminalProgressBar')
 import scipy.stats as ss
-
+nengo.rc.set('progress', 'progress_bar', 'nengo.utils.progress.TerminalProgressBar')
 class working_memory_model():
     '''
     Proportion: The percentage of neurons in the working memory network affected by the synaptic degradation(Default = 0)
     
-    Degradation: The degradation that should be appled to the synaptic weights (Default = 0)
+    Transmission: The transmission of the synapse (Default = 1)
     '''
-    def __init__(self, proportion = 0, degradation = 0):
+    def __init__(self, proportion, transmission, day = 0):
         
         print 'Importing model parameters from parameters.txt'
         self.P = eval(open('parameters.txt').read())
@@ -48,7 +44,7 @@ class working_memory_model():
         self.P['timesteps'] = np.arange(0,int((self.P['t_cue']+ self.P['t_delay'])/self.P['dt_sample']))
         self.P['cues'] = self.cues
         self.P['perceived'] = self.perceived
-        self.degradation = degradation
+        self.transmission = transmission
         self.proportion = proportion     
         self.spiking_array = []
         self.accuracy_data = []
@@ -56,6 +52,7 @@ class working_memory_model():
         self.memory_threshhold = 0
         self.ground_zero = 500
         np.random.seed(self.ens_seed)
+        self.day = day
 
 
     def noise_bias_function(self,t):
@@ -153,8 +150,7 @@ class working_memory_model():
                 plt.xlabel('Neuron #')
                 plt.ylabel('Frequency')
                 plt.show()
-        if self.trial == 0: print len(idx)    
-        weights[idx] = weights[idx] * (1-self.degradation)
+        weights[idx] = weights[idx] * (self.transmission)
         return weights
     
     def run(self, params):
@@ -191,8 +187,6 @@ class working_memory_model():
         else:
             rc.set("decoder_cache", "enabled", "True")
         
-        if self.trial == 0:
-            print '\nBuilding model...'
         with nengo.Network(seed = self.net_seed) as model:
             wm = nengo.Ensemble(self.neurons_wm, 2, neuron_type = self.neuron_type,seed = self.ens_seed, label = 'Working Memory')
             self.wm_recurrent = nengo.Connection(wm, wm, synapse = self.tau_wm, function = self.wm_recurrent_function, seed = self.con_seed, 
@@ -203,7 +197,6 @@ class working_memory_model():
         weights = self.degrade_synaptic_connection(sim, wm)
         
         with model:            
-            if self.trial == 0: print '\nCreating Ensembles...'
             
             cue = nengo.Node(output = self.cue_function, label = 'Cue')
             time = nengo.Node(output = self.time_function, label = 'Time')
@@ -224,7 +217,6 @@ class working_memory_model():
                 bias = nengo.Node([1] * 2, label = 'bias node')
             output = nengo.Ensemble(self.neurons_decide, 1, neuron_type = self.neuron_type, seed = self.ens_seed, label = 'Output')
             
-            if self.trial == 0: print '\nBuildiing Connections...'
             
             nengo.Connection(cue, inputs[0], synapse = None, seed = self.con_seed)
             nengo.Connection(time, inputs[1], synapse = None, seed = self.con_seed)
@@ -248,7 +240,6 @@ class working_memory_model():
                 nengo.Connection(temp,output,function = self.decision_function, seed = self.con_seed)
                 nengo.Connection(temp, cor, synapse = self.tau,function = self.f_dec, seed = self.con_seed)
             
-            if self.trial == 0: print 'Building Probes...'
             probe_wm = nengo.Probe(wm[0],synapse = 0.01, sample_every = self.dt_sample)
             probe_spikes = nengo.Probe(wm.neurons, 'spikes', sample_every = self.dt_sample)
             probe_output = nengo.Probe(output,synapse=None, sample_every = self.dt_sample)
@@ -257,21 +248,21 @@ class working_memory_model():
             #CollapsingGexfConverter().convert(model).write('model.gexf')                     
 
 
-        print 'Running trial %s...' %(self.trial+1)
+        print 'Running trial %s...\n' %(self.trial+1)
         with nengo.Simulator(model,dt = self.dt, seed = self.sim_seed) as sim:
             if self.drug_type == 'biophysical': 
                 sim = reset_gain_bias(self.P, model, sim, wm, self.wm_recurrent, wm_to_decision, self.drug)
             sim.run(self.t_cue + self.t_delay)
             xyz = sim.data[probe_spikes]
             abc = np.abs(sim.data[p_cor])
-            df_primary = primary_dataframe(self.P, sim, self.drug,self.trial, probe_wm, probe_output)
-            df_firing = firing_dataframe(self.P,sim,self.drug,self.trial, sim.data[wm], probe_spikes)
+            df_primary = primary_dataframe(self.P, sim, self.drug,self.trial, probe_wm, probe_output, self.day)
+            df_firing = firing_dataframe(self.P,sim,self.drug,self.trial, sim.data[wm], probe_spikes, self.day)
             
         return [df_primary, df_firing, abc, xyz]
                 
     def multiprocessing(self):
         
-        print "decision_type=%s, trials=%s..." %(self.decision_type,self.n_trials)
+        print "\nDay = %s, trials = %s..., transmission = %s, proportion = %s" %(self.day,self.n_trials, self.transmission, self.proportion)
         pool = Pool(nodes=self.n_processes)
         freeze_support()
         exp_params = []
@@ -307,14 +298,14 @@ class working_memory_model():
     def array_to_pandas(self,data, datatype, drug):
         n_trials = data.shape[0]
         n_timesteps = data.shape[1]
-        columns = ('trial', 'drug', 'time', datatype)
+        columns = ('trial', 'drug', 'time', datatype, 'day')
         df = pd.DataFrame(columns=columns)
         for trial in range(n_trials):
             print 'Adding trial %s, to %s...' %(trial + 1, datatype)
             df_time = []
             for t in range(n_timesteps):
                 df_temp = pd.DataFrame(
-                    [[trial, drug + ' (model)', t*0.01, data[trial][t][0]]], columns=columns)
+                    [[trial, drug + ' (model)', t*0.01, data[trial][t][0], self.day]], columns=columns)
                 df_time.append(df_temp)
                 del df_temp
             df_trial = pd.concat(df_time, ignore_index=True)
@@ -328,7 +319,7 @@ class working_memory_model():
         sns.set(context = 'paper')
         a = sns.tsplot(time = 'time', value = 'wm', data = primary_dataframe, unit = 'trial', ci = 95)
         a.set(xlabel='time (s)',ylabel='Decoded $\hat{cue}$ value',
-              title= "Number of trials = %s Prop degraded = %s Degradation = %s" %(self.n_trials, self.proportion,self.degradation))
+              title= "Number of trials = %s Prop degraded = %s Degradation = %s" %(self.n_trials, self.proportion,self.transmission))
         a.set(ylim = (0,1))
         plt.show(a)
 
@@ -364,26 +355,32 @@ class working_memory_model():
         plt.show(figure2)
         
         
-        df_correct = self.array_to_pandas(self.accuracy_data, 'correct', 'control')
-        self.df_correct = pd.concat([df_correct], ignore_index=True)
         c = sns.tsplot(time='time', value='correct', unit='trial', condition='drug',data = self.df_correct, ci=95, legend = False)
-        c.set(xlabel = 'time(s)', ylabel = 'DRT accuracy percentage',title= "Number of trials = %s Prop degraded = %s Degradation = %s" %(self.n_trials, self.proportion,self.degradation))
+        c.set(xlabel = 'time(s)', ylabel = 'DRT accuracy percentage',title= "Number of trials = %s Prop degraded = %s Degradation = %s" %(self.n_trials, self.proportion,self.transmission))
         c.set(ylim = (.4,1.1))
         plt.show(c)
 
       
     def go(self):
         primary_dataframe, firing_dataframe = self.multiprocessing()
-        self.plot_data(primary_dataframe, firing_dataframe)
+        
+        df_correct = self.array_to_pandas(self.accuracy_data, 'correct', 'control')
+        self.df_correct = pd.concat([df_correct], ignore_index=True)
+        if __name__ == '__main__':
+            self.plot_data(primary_dataframe, firing_dataframe)
+        
         self.primary_dataframe = primary_dataframe
+        
         self.firing_dataframe = firing_dataframe
+        
+        return primary_dataframe, firing_dataframe, self.df_correct
 
         
 
 if __name__ == '__main__':
-    #n = working_memory_model(proportion = .1, degradation = 1)
-    #n.go()
-    pass
+    n = working_memory_model(proportion = .1, transmission = 1)
+    n.go()
+    
 
 
 
