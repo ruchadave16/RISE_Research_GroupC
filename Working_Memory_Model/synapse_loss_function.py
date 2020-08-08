@@ -5,6 +5,7 @@ import numpy as np
 #This is a synapse loss function DESCRIBE MORE
 #For the data file, in each value, the first value of the list is the proportion of cells in the circuit affected by that group and the second is the synaptic transmission for each of them
 
+
 #Variables
 neurons = 1000 #Total number of neurons in the system
 day_step_size = 5 #How often do you want to simulate the model in days
@@ -132,4 +133,14 @@ for step in range(0, total_steps + 1): #Here, the step size is 5
 data_final = pd.DataFrame(final_list)
 data_final.columns = ["Day Number", "L0", "L1", "L2", "L3", "L4", "L5", "L6"]
 data_final.to_csv('synapse_loss_data.csv', index=False)
+
+#Create dataframe that holds synapse transmission from day 0 to 200 - After day 185, cell loses connections
+#This is for tau = 20 days - amount of time for 10% loss in the synapse
+df = []
+for t in range(0,201,5):
+	df.append([t, synapse_trans(20, t)])
+
+print synapse_trans(30, 284) 
+data = pd.DataFrame(df)
+data.columns = ["Day Number", "Amount of Synapse Transmission"]
 
