@@ -21,7 +21,7 @@ def synapse_trans(tau, t):
 
 #This is the initial probability function that DOES NOT account for the previous number affected
 def prob(t):
-	probability_aff = (0.001 + (0.00001*t))
+	probability_aff = (0.004 + (0.000001*t))
 	return probability_aff
 
 prev_num_affected = 0
@@ -134,13 +134,14 @@ data_final = pd.DataFrame(final_list)
 data_final.columns = ["Day Number", "L0", "L1", "L2", "L3", "L4", "L5", "L6"]
 data_final.to_csv('synapse_loss_data.csv', index=False)
 
+print data_final.head()
+
 #Create dataframe that holds synapse transmission from day 0 to 200 - After day 185, cell loses connections
 #This is for tau = 20 days - amount of time for 10% loss in the synapse
 df = []
 for t in range(0,201,5):
 	df.append([t, synapse_trans(20, t)])
 
-print synapse_trans(30, 284) 
 data = pd.DataFrame(df)
 data.columns = ["Day Number", "Amount of Synapse Transmission"]
 
