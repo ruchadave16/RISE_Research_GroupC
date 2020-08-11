@@ -5,13 +5,12 @@ Created on Sat Aug  1 21:54:34 2020
 
 @author: vivekchari
 """
-
+import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 import numpy as np
-from helper import make_cues, make_addon, ch_dir, empirical_dataframe, MySolver, reset_gain_bias, primary_dataframe, firing_dataframe, get_correct
-from pathos.multiprocessing import ProcessingPool as Pool
+from helper import make_cues, ch_dir, reset_gain_bias, primary_dataframe, firing_dataframe
 import nengo
 from nengo.rc import rc
 from nengo.dists import Choice, Exponential, Uniform
@@ -19,15 +18,23 @@ from pathos.helpers import freeze_support
 #from nengo_extras import CollapsingGexfConverter
 import scipy.stats as ss
 nengo.rc.set('progress', 'progress_bar', 'nengo.utils.progress.TerminalProgressBar')
+import pyopencl as cl
+import nengo_ocl
+os.environ['PYOPENCL_COMPILER_OUTPUT'] = '1'
+import pathos
 class working_memory_model():
     '''
+    A model of working memory based of the sDRT task.
+    
     Proportion: The percentage of neurons in the working memory network affected by the synaptic degradation(Default = 0)
     
     Transmission: The transmission of the synapse (Default = 1)
+                            n
+    Decoder Equation: y(𝑡)= ∑d(𝑓𝑖 ) 𝑎𝑖(𝑥(𝑡))
+                            𝑖=0
     '''
-    def __init__(self, proportion, transmission, day = 0):
-        
-        print 'Importing model parameters from parameters.txt'
+    def __init__(self, transmission_proportion = [], day = 0):
+        print('Importing model parameters from parameters.txt')
         self.P = eval(open('parameters.txt').read())
         self.seed = self.P['seed']
         self.rng = np.random.RandomState(seed = self.seed)
@@ -44,34 +51,33 @@ class working_memory_model():
         self.P['timesteps'] = np.arange(0,int((self.P['t_cue']+ self.P['t_delay'])/self.P['dt_sample']))
         self.P['cues'] = self.cues
         self.P['perceived'] = self.perceived
-        self.transmission = transmission
-        self.proportion = proportion     
+        self.t_p = transmission_proportion 
         self.spiking_array = []
         self.accuracy_data = []
         self.neuron_type = nengo.LIF()
         self.memory_threshhold = 0
-        self.ground_zero = 500
-        np.random.seed(self.ens_seed)
+        self.ground_zero = 1206
+        np.random.seed(82900)
         self.day = day
 
-
     def noise_bias_function(self,t):
-		if self.drug_type=='neural':
-			return np.random.normal(self.drug_effect_neural[self.drug],self.noise_wm)
-		else:
-			return np.random.normal(0.0,self.noise_wm)
+        if self.drug_type=='neural':
+            return np.random.normal(self.drug_effect_neural[self.drug],self.noise_wm)
+        else:
+            return np.random.normal(0.0,self.noise_wm)
         
     def noise_decision_function(self, t):
         if self.decision_type == 'default':
             return np.random.normal(0.0,self.noise_decision)
         elif self.decision_type == 'basal_ganglia':
-			return np.random.normal(0.0, self.noise_decision,size = 2)
+            return np.random.normal(0.0, self.noise_decision,size = 2)
         
     def inputs_function(self,x):
         return x * self.tau_wm
     
     def cue_function(self, t):
         if t < self.t_cue and self.perceived[self.trial] != 0:
+            
             self.cue = self.cue_scale * self.cues[self.trial]
             return self.cue_scale * self.cues[self.trial]
         else:
@@ -84,55 +90,54 @@ class working_memory_model():
         else:
             return 0
         
-
     def wm_recurrent_function(self,x):
-		if self.drug_type == 'functional':
-			return x * self.drug_effect_functional[self.drug]
-		else:
-			return x
+        if self.drug_type == 'functional':
+            return x * self.drug_effect_functional[self.drug]
+        else:
+            return x
 
     def decision_function(self,x): 
         output=0.0
         if self.decision_type=='default':
             value = x[0] + x[1]
-            if value > 0.0:
-                output = 1.0
-            elif value < 0.0:
-                output = -1.0
+            if value > 0.0: output = 1.0
+            elif value < 0.0: output = -1.0
         elif self.decision_type == 'basal_ganglia':
-            if x[0] > x[1]:
-                output = 1.0
-            elif x[0] < x[1]:
-                output = -1.0
+            if x[0] > x[1]: output = 1.0
+            elif x[0] < x[1]: output = -1.0
         return output 
 
     def BG_rescale(self,x): #rescales -1 to 1 into 0.3 to 1, makes 2-dimensional
-		pos_x = 0.5 * (x + 1)
-		rescaled = 0.4 + 0.6 * pos_x, 0.4 + 0.6 * (1 - pos_x)
-		return rescaled
+        pos_x = 0.5 * (x + 1)
+        rescaled = 0.4 + 0.6 * pos_x, 0.4 + 0.6 * (1 - pos_x)
+        return rescaled
     
     def f_dec(self,x):
-        value = x[0]
+        value = (x[0] + x[1])
         if value > self.memory_threshhold and self.cue > 0:
             return 1
         elif value < (-1 * self.memory_threshhold) and self.cue < 0:
            return 1
         return 0
-    '''
-    def stim_ensemble(self,ens, sim, bias = False):
-        n_neurons = min(int(ens.n_neurons * self.stim_proportion), ens.n_neurons)
-        idx = np.random.choice(np.arange(ens.n_neurons), replace=False, size=n_neurons)    
-        if bias:
-            bias_sig = sim.signals[sim.model.sig[ens.neurons]['bias']]
-            bias_sig.setflags(write=True)
-            bias_sig[idx] = bias_sig[idx] * self.stim_level'''
-
-       
+    def arrange(self, array, x):
+        n = len(array)
+        for i in range(1, n):
+            diff = abs(array[i] - x)
+            j = i - 1
+            if (abs(array[j] - x) > diff):
+                temp = array[i] 
+                while (abs(array[j] - x) >  diff and j >= 0):
+                    array[j + 1] = array[j]
+                    j -= 1
+                array[j + 1] = temp
+        return array
+    
     def degrade_synaptic_connection(self, sim, ens):
+        affected_prop = 1 - self.t_p[-1][0]
         weights = sim.data[self.wm_recurrent].weights / sim.data[ens].gain[:, None]
-        n_neurons = min(int(ens.n_neurons * self.proportion), ens.n_neurons)
 
-        if self.proportion > .7:
+        n_neurons = min(int(ens.n_neurons * affected_prop), ens.n_neurons)
+        if affected_prop > .75:
             idx = np.random.choice(np.arange(ens.n_neurons), replace=False, size = n_neurons)
         else:
             x = np.arange(ens.n_neurons)
@@ -144,13 +149,23 @@ class working_memory_model():
                     i = .001   
             prob = prob / prob.sum() #normalize the probabilities so their sum is 1
             idx = np.random.choice(x, size = n_neurons, p = prob, replace = False)
+        idx = self.arrange(idx,self.ground_zero)
+        sorted_idx =[]
+        for i in range(len(self.t_p)):
+            sorted_idx.append(idx[:int(self.neurons_wm * self.t_p[i][0])])
+        if self.trial == 0:
+            plt.hist(idx, bins = self.neurons_wm)
+            plt.xlim((0,self.neurons_wm))
+            plt.xlabel('Neuron #')
+            plt.ylabel('Frequency')
+            plt.title("\nDay = %s, Number selected = %s" %(self.day, n_neurons))
+            plt.show()
+        #print (weights[sorted_idx[i]].shape)
+        for i in range(len(self.t_p)):
+            weights[sorted_idx[i]] = weights[sorted_idx[i]] * self.t_p[i][1]
             if self.trial == 0:
-                plt.hist(idx, bins = 1000)
-                plt.xlim((0,1000))
-                plt.xlabel('Neuron #')
-                plt.ylabel('Frequency')
-                plt.show()
-        weights[idx] = weights[idx] * (self.transmission)
+                print ('Transmission = %s, proportion = %s'%(self.t_p[i][1],self.t_p[i][0]))
+                #print(weights[sorted_idx[i]].shape)
         return weights
     
     def run(self, params):
@@ -186,18 +201,25 @@ class working_memory_model():
             rc.set("decoder_cache", "enabled", "False") #don't try to remember old decoders
         else:
             rc.set("decoder_cache", "enabled", "True")
-        
+        '''
+        devices = []
+        platform = cl.get_platforms()[0]
+        devices.append(platform.get_devices()[0])
+        ctx = cl.Context(devices)
+        print ('Set OpenCL Context...')
+        '''
         with nengo.Network(seed = self.net_seed) as model:
             wm = nengo.Ensemble(self.neurons_wm, 2, neuron_type = self.neuron_type,seed = self.ens_seed, label = 'Working Memory')
             self.wm_recurrent = nengo.Connection(wm, wm, synapse = self.tau_wm, function = self.wm_recurrent_function, seed = self.con_seed, 
                                                  solver = nengo.solvers.LstsqL2(weights=True))
-     
+
+
         with nengo.Simulator(model,dt = self.dt, seed = self.sim_seed) as sim:
             pass
+        
         weights = self.degrade_synaptic_connection(sim, wm)
         
-        with model:            
-            
+        with nengo.Network(seed = self.net_seed) as model:
             cue = nengo.Node(output = self.cue_function, label = 'Cue')
             time = nengo.Node(output = self.time_function, label = 'Time')
             inputs = nengo.Ensemble(self.neurons_inputs, 2, seed = self.ens_seed, label = 'Input Neurons')
@@ -220,14 +242,15 @@ class working_memory_model():
             
             nengo.Connection(cue, inputs[0], synapse = None, seed = self.con_seed)
             nengo.Connection(time, inputs[1], synapse = None, seed = self.con_seed)
-            nengo.Connection(inputs, wm, synapse = self.tau_wm, function=self.inputs_function, seed = self.con_seed)
+            nengo.Connection(inputs, wm, synapse = self.tau_wm, function=self.inputs_function, seed = self.con_seed)         
             self.wm_recurrent = nengo.Connection(wm.neurons, wm.neurons, synapse = self.tau_wm, seed = self.con_seed, transform = weights)
-            nengo.Connection(noise_wm_node, wm.neurons, synapse = self.tau_wm, transform = np.ones((self.neurons_wm,1))*self.tau_wm, seed = self.con_seed)
+            nengo.Connection(noise_wm_node, wm.neurons, synapse = self.tau_wm, transform = np.ones((self.neurons_wm,1)) * self.tau_wm, seed = self.con_seed)
+            
             if self.decision_type == 'default':
                 wm_to_decision = nengo.Connection(wm[0], decision[0], synapse = self.tau, seed = self.con_seed)
                 nengo.Connection(noise_decision_node, decision[1], synapse = None, seed = self.con_seed)
                 nengo.Connection(decision, output,function = self.decision_function, seed = self.con_seed)
-                nengo.Connection(decision, cor, synapse = self.tau,function = self.f_dec, seed = self.con_seed)
+                nengo.Connection(decision, cor, synapse = 0.025,function = self.f_dec, seed = self.con_seed)
 
                 
             elif self.decision_type == 'basal_ganglia':
@@ -240,31 +263,29 @@ class working_memory_model():
                 nengo.Connection(temp,output,function = self.decision_function, seed = self.con_seed)
                 nengo.Connection(temp, cor, synapse = self.tau,function = self.f_dec, seed = self.con_seed)
             
-            probe_wm = nengo.Probe(wm[0],synapse = 0.01, sample_every = self.dt_sample)
+            probe_wm = nengo.Probe(wm[0],synapse = 0.024, sample_every = self.dt_sample)
             probe_spikes = nengo.Probe(wm.neurons, 'spikes', sample_every = self.dt_sample)
-            probe_output = nengo.Probe(output,synapse=None, sample_every = self.dt_sample)
-            p_cor = nengo.Probe(cor, synapse=None, sample_every = self.dt_sample)
+            probe_output = nengo.Probe(output,synapse = None, sample_every = self.dt_sample)
+            p_cor = nengo.Probe(cor, synapse = None, sample_every = self.dt_sample)
             #data_dir = ch_dir()
-            #CollapsingGexfConverter().convert(model).write('model.gexf')                     
+            #CollapsingGexfConverter().convert(model).write('model.gexf') 
 
-
-        print 'Running trial %s...\n' %(self.trial+1)
+        print('Running trial %s...\n' %(self.trial+1))
         with nengo.Simulator(model,dt = self.dt, seed = self.sim_seed) as sim:
             if self.drug_type == 'biophysical': 
                 sim = reset_gain_bias(self.P, model, sim, wm, self.wm_recurrent, wm_to_decision, self.drug)
             sim.run(self.t_cue + self.t_delay)
             xyz = sim.data[probe_spikes]
             abc = np.abs(sim.data[p_cor])
+            print('Constructing Dataframes...')
             df_primary = primary_dataframe(self.P, sim, self.drug,self.trial, probe_wm, probe_output, self.day)
             df_firing = firing_dataframe(self.P,sim,self.drug,self.trial, sim.data[wm], probe_spikes, self.day)
             
         return [df_primary, df_firing, abc, xyz]
                 
     def multiprocessing(self):
-        
-        print "\nDay = %s, trials = %s..., transmission = %s, proportion = %s" %(self.day,self.n_trials, self.transmission, self.proportion)
-        pool = Pool(nodes=self.n_processes)
-        freeze_support()
+        print("\nDay = %s, trials = %s,..." %(self.day,self.n_trials))
+        pool = pathos.multiprocessing.ProcessingPool()
         exp_params = []
         for drug in self.drugs:
             for trial in self.trials:
@@ -282,14 +303,13 @@ class working_memory_model():
             self.spiking_array.append((self.df_list[i][3]))
         self.spiking_array = np.array(self.spiking_array)
         
-        print 'Constructing Dataframes...'
         primary_dataframe = pd.concat([self.df_list[i][0] for i in range(len(self.df_list))], ignore_index=True)
         firing_dataframe = pd.concat([self.df_list[i][1] for i in range(len(self.df_list))], ignore_index=True)
 
         return primary_dataframe, firing_dataframe
     def export(self):
-        print 'Exporting Data...'
-        datadir = ch_dir()
+        print('Exporting Data...')
+        ch_dir('Pickled dataframes') #directory to export data to
         primary_dataframe.to_pickle('primary_data.pkl')
         firing_dataframe.to_pickle('firing_data.pkl')
         param_df = pd.DataFrame([self.P])
@@ -301,7 +321,7 @@ class working_memory_model():
         columns = ('trial', 'drug', 'time', datatype, 'day')
         df = pd.DataFrame(columns=columns)
         for trial in range(n_trials):
-            print 'Adding trial %s, to %s...' %(trial + 1, datatype)
+            print('Adding trial %s, to %s...' %(trial + 1, datatype))
             df_time = []
             for t in range(n_timesteps):
                 df_temp = pd.DataFrame(
@@ -315,35 +335,15 @@ class working_memory_model():
 
         
     def plot_data(self, primary_dataframe, firing_dataframe, ):
-        print 'Plotting Data...'
+        print('Plotting Data...')
         sns.set(context = 'paper')
         a = sns.tsplot(time = 'time', value = 'wm', data = primary_dataframe, unit = 'trial', ci = 95)
         a.set(xlabel='time (s)',ylabel='Decoded $\hat{cue}$ value',
-              title= "Number of trials = %s Prop degraded = %s Degradation = %s" %(self.n_trials, self.proportion,self.transmission))
+              title= "Number of trials = %s" %(self.n_trials))
         a.set(ylim = (0,1))
         plt.show(a)
-
-        '''
-        print 'Plotting Data...'
-        spikes = self.spiking_array[0]
-        spike_sum = np.sum(spikes,axis=0)
-        indices = np.argsort(spike_sum)[::-1]
-        top_spikes=spikes[:,indices[0:50]]
-        
-        b = rasterplot(self.spiking_array[1], top_spikes, use_eventplot = True)
-        b = plt.gca()
-        b.invert_yaxis()
-        b.set(xlabel = 'time (s)', ylabel = 'neuron \nactivity $a_i(t)$')
-        plt.show(b)
-        b = plot_spikes(preprocess_spikes(firing_dataframe['time'],top_spikes))
-        b.xlabel("Time [s]")
-        b.ylabel("Neuron number")
-        plt.show(b)'''
-
-
-        print 'Plotting Data...'
-        
-    	figure2, (ax3, ax4) = plt.subplots(1, 2)
+        print('Plotting Data...')
+        figure2, (ax3, ax4) = plt.subplots(1, 2)
         if len(firing_dataframe.query("tuning=='strong'")) > 0:
             sns.tsplot(time="time",value="firing_rate",unit="neuron-trial",ax=ax3,ci=95,data=firing_dataframe.query("tuning=='strong'").reset_index(), legend = False)
         
@@ -356,7 +356,7 @@ class working_memory_model():
         
         
         c = sns.tsplot(time='time', value='correct', unit='trial', condition='drug',data = self.df_correct, ci=95, legend = False)
-        c.set(xlabel = 'time(s)', ylabel = 'DRT accuracy percentage',title= "Number of trials = %s Prop degraded = %s Degradation = %s" %(self.n_trials, self.proportion,self.transmission))
+        c.set(xlabel = 'time(s)', ylabel = 'DRT accuracy percentage',title= "Number of trials = %s" %(self.n_trials))
         c.set(ylim = (.4,1.1))
         plt.show(c)
 
@@ -375,18 +375,8 @@ class working_memory_model():
         
         return primary_dataframe, firing_dataframe, self.df_correct
 
-        
+
 
 if __name__ == '__main__':
-    n = working_memory_model(proportion = .1, transmission = 1)
+    n = working_memory_model(day = 0)
     n.go()
-    
-
-
-
-
-
-
-
-
-
