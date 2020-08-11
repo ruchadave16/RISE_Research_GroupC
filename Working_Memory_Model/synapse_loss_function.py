@@ -9,7 +9,7 @@ import numpy as np
 #Variables
 neurons = 1000 #Total number of neurons in the system
 day_step_size = 5 #How often do you want to simulate the model in days
-tot_days = 1200 #Total number of days you want to run for - here 0 - 1000 inclusive
+tot_days = 2000 #Total number of days you want to run for - here 0 - 1000 inclusive
 total_steps = tot_days / day_step_size
 
 #Function to calculate the synapse transmission as time continues on 
@@ -40,9 +40,10 @@ for t in range(0, tot_days + 1): #Goes from 0 to 1000
 
 #This calculates the new number of cells that will be affected after the current day step
 list_new_affected = [] #List of total cells that will be affected after this day - index is the day step (Day 0 is 0, Day 20 is 1, etc)
-prev_days_total = 0
+prev_days_total = 4.0
 for x in day_and_num_affected:
 	new_affected = x[-1] - prev_days_total
+
 	prev_days_total = x[-1]
 	list_new_affected.append(new_affected)
 
@@ -106,12 +107,12 @@ for step in range(0, total_steps + 1): #Here, the step size is 5
 
 	#Move everything over by one
 	number_transfers = list_new_affected[step]
-	if number_transfers < 0:
-		number_transfers = 0
-	L0[0] -= number_transfers
-
-
-	L1.insert(0, number_transfers)
+	if (L0[0] - number_transfers) < 0:
+		L0[0] = 0
+		L1.insert(0, 0)
+	else:
+		L0[0] -= number_transfers
+		L1.insert(0, number_transfers)
 	if len(L1) > 5:
 		next_level = L1.pop(-1)
 		L2.insert(0, next_level)
@@ -132,6 +133,9 @@ for step in range(0, total_steps + 1): #Here, the step size is 5
 		next_level = L5.pop(-1)
 		num = next_level
 		L6[0] += num
+		print(L0, L1)
+	print(L0, L1)
+
 
 data_final = pd.DataFrame(final_list)
 data_final.columns = ["Day Number", "L0", "L1", "L2", "L3", "L4", "L5", "L6"]
