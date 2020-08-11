@@ -4,12 +4,13 @@ def make_addon(N):
 	addon=str(''.join(random.choice(string.ascii_uppercase+string.digits) for _ in range(N)))
 	return addon
 
-def ch_dir():
+def ch_dir(title):
 	#change directory for data and plot outputs
 	import os
 	import sys
+	import time
 	root=os.getcwd()
-	addon=make_addon(9)
+	addon= title + time.asctime()
 	datadir=''
 	if sys.platform == "linux" or sys.platform == "linux2" or sys.platform == "darwin":
 		datadir=root+'/data/'+addon+'/' #linux or mac
@@ -18,22 +19,6 @@ def ch_dir():
 	os.makedirs(datadir)
 	os.chdir(datadir) 
 	return datadir
-
-def empirical_dataframe():
-	import numpy as np
-	import pandas as pd
-	columns=('time','drug','accuracy','trial')
-	emp_times = [3.0,5.0,7.0,9.0]
-	emp_dataframe = pd.DataFrame(columns=columns,index=np.arange(0, 12))
-	pre_PHE=[0.972, 0.947, 0.913, 0.798]
-	pre_GFC=[0.970, 0.942, 0.882, 0.766]
-	post_GFC=[0.966, 0.928, 0.906, 0.838]
-	post_PHE=[0.972, 0.938, 0.847, 0.666]
-	q=0
-	for t in range(len(emp_times)):
-		emp_dataframe.loc[q]=[emp_times[t],'control (empirical)',np.average([pre_GFC[t],pre_PHE[t]]),0]
-		q+=3
-	return emp_dataframe
 
 def make_cues(P):
 	import numpy as np
@@ -111,12 +96,10 @@ def firing_dataframe(P,sim,drug,trial,sim_wm,probe_spikes, day):
 			j+=1
 		# print 'appending dataframe for neuron %s' %f
 	return df_firing
-
 def get_correct(cue,output_val):
 	if (cue > 0.0 and output_val > 0.0) or (cue < 0.0 and output_val < 0.0): correct=1
 	else: correct=0
-	return correct
-			
+	return correct	
 def get_tuning(P,trial,enc):
 	cue=P['cues'][trial]
 	enc_min_cutoff=P['enc_min_cutoff']
@@ -129,3 +112,8 @@ def get_tuning(P,trial,enc):
 		(cue < 0.0 and enc[0] < -1.0*enc_max_cutoff): tuning='strong'
 	else: tuning='nonpreferred'
 	return tuning
+
+
+
+
+
