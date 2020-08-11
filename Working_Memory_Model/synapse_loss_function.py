@@ -106,7 +106,10 @@ for step in range(0, total_steps + 1): #Here, the step size is 5
 
 	#Move everything over by one
 	number_transfers = list_new_affected[step]
+	if number_transfers < 0:
+		number_transfers = 0
 	L0[0] -= number_transfers
+
 
 	L1.insert(0, number_transfers)
 	if len(L1) > 5:
