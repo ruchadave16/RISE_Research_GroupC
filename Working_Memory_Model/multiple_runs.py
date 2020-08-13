@@ -18,11 +18,10 @@ class run_days():
     def __init__(self):
         self.P = eval(open('parameters.txt').read())
         self.neurons = self.P['neurons_wm']
-        self.days_to_simulate = self.P['days_to_simulate']
-        self.day_step_size = self.P['day_step_size']
-        self.synapse_dataframe = calculate(neurons = self.neurons, day_step_size = self.day_step_size, tot_days = self.days_to_simulate, 
+        self.DBS = self.P['DBS']
+        self.synapse_dataframe = calculate(synapses = (self.neurons ** 2), day_step_size = 5, tot_days = 10000, 
                                       gimme_days = False, gimme_frames = True, export = False)
-        self.days = [1200]
+        self.days = self.P['days_to_simulate']
         self.cumulative_primary_dataframe = pd.DataFrame()
         self.cumulative_firing_dataframe = pd.DataFrame()
         self.cumulative_accuracy_dataframe = pd.DataFrame()
@@ -32,9 +31,9 @@ class run_days():
         sns.set(context = 'paper')
         a = sns.tsplot(time = 'time', value = 'wm', data = self.cumulative_primary_dataframe, unit = 'trial', ci = 95, condition = 'day')
         a.set(xlabel='time (s)',ylabel='Decoded $\hat{cue}$ value')
-        a.set(ylim = (0,1))
+        a.set(ylim = (0,1.1))
         plt.show(a)
-        
+        '''
         print('Plotting Data...')
         figure2, (ax3, ax4) = plt.subplots(1, 2)
         if len(self.cumulative_firing_dataframe.query("tuning=='strong'")) > 0:
@@ -48,7 +47,7 @@ class run_days():
         ax3.set(xlabel='time (s)',ylabel='Normalized Firing Rate',title='Preferred Direction', ylim = (0,350))
         ax4.set(xlabel='time (s)',ylim=(0,350),ylabel='',title='Nonpreferred Direction')
         plt.show(figure2)
-        
+        '''
         self.cumulative_accuracy_dataframe['correct'] = (self.cumulative_accuracy_dataframe['correct'] - self.cumulative_accuracy_dataframe['correct'].min())/(self.cumulative_accuracy_dataframe['correct'].max() - self.cumulative_accuracy_dataframe['correct'].min())
         c = sns.tsplot(time='time', value='correct', unit='trial', condition='day',data = self.cumulative_accuracy_dataframe, ci=95)
         c.set(xlabel = 'time(s)', ylabel = 'DRT accuracy percentage')
@@ -63,14 +62,14 @@ class run_days():
                 if isNaN(i[1]):
                     i[1] =0
             t_p = t_p[::-1]
-            n = working_memory_model(transmission_proportion = t_p,day = day)
-            primary_dataframe, firing_dataframe, df_correct = n.go()
+            print(t_p)
+            self.n = working_memory_model(transmission_proportion = t_p,day = day, DBS = self.DBS)
+            primary_dataframe, firing_dataframe, df_correct = self.n.go()
             print('Appending to dataframe...')
             self.cumulative_primary_dataframe = self.cumulative_primary_dataframe.append(primary_dataframe, ignore_index=True)
             self.cumulative_firing_dataframe = self.cumulative_firing_dataframe.append(firing_dataframe, ignore_index=True)
             self.cumulative_accuracy_dataframe = self.cumulative_accuracy_dataframe.append(df_correct, ignore_index=True)
             
-            del n   
     def export(self):
         ch_dir(('Day %s to %s'%(self.days[0], self.days[-1]))) #directory to which data is saved
         self.cumulative_primary_dataframe.to_csv("Primary_dataframe.csv")
@@ -81,7 +80,6 @@ if __name__ == '__main__':
     t0 = time.time()
     a = run_days()
     a.export()
-    a.plot()
     t1 = time.time()
     print(t1 - t0)
         

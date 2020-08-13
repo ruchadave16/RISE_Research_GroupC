@@ -24,7 +24,8 @@ for i in range(len(paths)):
 
 a = databases[0]
 
-flatui = ["#9b59b6", "#3498db", "#e74c3c", "#34495e", "#2ecc71"]
+flatui = ["#9b59b6", "#3498db", "#3F8798
+", "#1FA2BE", "#00BDE5"]
 
 try:
     c = sns.tsplot(time='time', value='correct', unit='trial', condition='day',data = a, ci=95, alpha = .7, color=sns.color_palette())
