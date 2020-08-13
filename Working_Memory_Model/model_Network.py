@@ -5,8 +5,9 @@ Created on Sat Aug  1 21:54:34 2020
 
 @author: vivekchari
 """
-import os
 import matplotlib.pyplot as plt
+import matplotlib
+import matplotlib
 import seaborn as sns
 import pandas as pd
 import numpy as np
@@ -18,10 +19,9 @@ from pathos.helpers import freeze_support
 #from nengo_extras import CollapsingGexfConverter
 import scipy.stats as ss
 nengo.rc.set('progress', 'progress_bar', 'nengo.utils.progress.TerminalProgressBar')
-import pyopencl as cl
-import nengo_ocl
-os.environ['PYOPENCL_COMPILER_OUTPUT'] = '1'
 import pathos
+from matplotlib.cm import get_cmap
+from sklearn.preprocessing import normalize
 class working_memory_model():
     '''
     A model of working memory based of the sDRT task.
@@ -33,7 +33,7 @@ class working_memory_model():
     Decoder Equation: y(𝑡)= ∑d(𝑓𝑖 ) 𝑎𝑖(𝑥(𝑡))
                             𝑖=0
     '''
-    def __init__(self, transmission_proportion = [], day = 0):
+    def __init__(self, transmission_proportion = [], day = 0, DBS = False):
         print('Importing model parameters from parameters.txt')
         self.P = eval(open('parameters.txt').read())
         self.seed = self.P['seed']
@@ -56,25 +56,26 @@ class working_memory_model():
         self.accuracy_data = []
         self.neuron_type = nengo.LIF()
         self.memory_threshhold = 0
-        self.ground_zero = 1206
-        np.random.seed(82900)
+        self.ground_zero = 750
+        #np.random.seed(82900)
         self.day = day
+        self.DBS = DBS
+        self.pulse_duration = self.P['DBS pulsewidth']
+        self.amplitude = self.P['DBS amplitude']
+        self.frequency = self.P['DBS frequency']
 
     def noise_bias_function(self,t):
         if self.drug_type=='neural':
             return np.random.normal(self.drug_effect_neural[self.drug],self.noise_wm)
         else:
             return np.random.normal(0.0,self.noise_wm)
-        
     def noise_decision_function(self, t):
         if self.decision_type == 'default':
             return np.random.normal(0.0,self.noise_decision)
         elif self.decision_type == 'basal_ganglia':
             return np.random.normal(0.0, self.noise_decision,size = 2)
-        
     def inputs_function(self,x):
         return x * self.tau_wm
-    
     def cue_function(self, t):
         if t < self.t_cue and self.perceived[self.trial] != 0:
             
@@ -83,19 +84,16 @@ class working_memory_model():
         else:
             self.cue = 0
             return 0
-        
     def time_function(self,t):
         if t > self.t_cue:
             return self.time_scale
         else:
             return 0
-        
     def wm_recurrent_function(self,x):
         if self.drug_type == 'functional':
             return x * self.drug_effect_functional[self.drug]
         else:
             return x
-
     def decision_function(self,x): 
         output=0.0
         if self.decision_type=='default':
@@ -106,12 +104,10 @@ class working_memory_model():
             if x[0] > x[1]: output = 1.0
             elif x[0] < x[1]: output = -1.0
         return output 
-
     def BG_rescale(self,x): #rescales -1 to 1 into 0.3 to 1, makes 2-dimensional
         pos_x = 0.5 * (x + 1)
         rescaled = 0.4 + 0.6 * pos_x, 0.4 + 0.6 * (1 - pos_x)
         return rescaled
-    
     def f_dec(self,x):
         value = (x[0] + x[1])
         if value > self.memory_threshhold and self.cue > 0:
@@ -119,55 +115,93 @@ class working_memory_model():
         elif value < (-1 * self.memory_threshhold) and self.cue < 0:
            return 1
         return 0
-    def arrange(self, array, x):
-        n = len(array)
-        for i in range(1, n):
-            diff = abs(array[i] - x)
-            j = i - 1
-            if (abs(array[j] - x) > diff):
-                temp = array[i] 
-                while (abs(array[j] - x) >  diff and j >= 0):
-                    array[j + 1] = array[j]
-                    j -= 1
-                array[j + 1] = temp
-        return array
+    def DBS_function(self,t):
+        pulsewidth = self.pulse_duration
+        period = 1/(self.frequency)
+        amplitude = self.amplitude
+        return (amplitude * np.where(((t % period <(pulsewidth))),1, 0))
+    def arrange(self, array, m):
+        q = array.tolist()
+        q.sort(key = lambda x: abs(x - m))
+        return np.asarray(q)
+    def prob_selection(self, ens):
+        affected_prop = 1 - self.t_p[-1][0]
+        print(affected_prop)
+        x = np.arange(ens.n_neurons)
+        n_synapses_affected = min(int(np.sqrt((ens.n_neurons ** 2) * affected_prop)), int(np.sqrt(ens.n_neurons ** 2)))
+        xU, xL = x + (.75*n_synapses_affected), x - (.75*n_synapses_affected)
+        #prob = ss.norm.cdf(xU, loc = self.ground_zero, scale = 3) - ss.norm.cdf(xL,loc = self.ground_zero, scale = 3)
+        prob = ss.poisson.cdf(k = xU, mu =self.ground_zero) - ss.poisson.cdf(k = xL,mu = self.ground_zero)
+        for i in prob:
+            if round(i,3) == 0:
+                i = .001
+        np.nan_to_num(prob, copy=False)
+        prob = prob / prob.sum() #normalize the probabilities so their sum is 1
+        np.nan_to_num(prob, copy=False, nan=0)
+        if n_synapses_affected > (.5*ens.n_neurons):
+            idx = np.random.choice(x, size = n_synapses_affected * 2, p = prob, replace = True)
+        else:
+            idx = np.random.choice(x, size = n_synapses_affected * 2, p = prob, replace = False)
+
+        idx2 = idx[int(len(idx)/2):]
+        idx = idx[:int(len(idx)/2)]
+        return idx, idx2
     
     def degrade_synaptic_connection(self, sim, ens):
-        affected_prop = 1 - self.t_p[-1][0]
+        print ('Building connection weight matrix...')
         weights = sim.data[self.wm_recurrent].weights / sim.data[ens].gain[:, None]
-
-        n_neurons = min(int(ens.n_neurons * affected_prop), ens.n_neurons)
-        if affected_prop > .75:
-            idx = np.random.choice(np.arange(ens.n_neurons), replace=False, size = n_neurons)
-        else:
-            x = np.arange(ens.n_neurons)
-            xU, xL = x + (.75*n_neurons), x - (.75*n_neurons)
-            #prob = ss.norm.cdf(xU, loc = self.ground_zero, scale = 3) - ss.norm.cdf(xL,loc = self.ground_zero, scale = 3)
-            prob = ss.poisson.cdf(k = xU, mu = self.ground_zero) - ss.poisson.cdf(k = xL,mu = self.ground_zero)
-            for i in prob:
-                if round(i,3) == 0:
-                    i = .001   
-            prob = prob / prob.sum() #normalize the probabilities so their sum is 1
-            idx = np.random.choice(x, size = n_neurons, p = prob, replace = False)
+        affected_prop = 1 - self.t_p[-1][0]
+        print ('Choosing %s synapses...'%(int((self.neurons_wm ** 2) * affected_prop)))
+        idx, idx2 = self.prob_selection(ens)
+        print ('Sorting matrices..')
         idx = self.arrange(idx,self.ground_zero)
+        #np.random.shuffle(idx2)
         sorted_idx =[]
-        for i in range(len(self.t_p)):
-            sorted_idx.append(idx[:int(self.neurons_wm * self.t_p[i][0])])
         if self.trial == 0:
-            plt.hist(idx, bins = self.neurons_wm)
-            plt.xlim((0,self.neurons_wm))
-            plt.xlabel('Neuron #')
-            plt.ylabel('Frequency')
-            plt.title("\nDay = %s, Number selected = %s" %(self.day, n_neurons))
-            plt.show()
-        #print (weights[sorted_idx[i]].shape)
-        for i in range(len(self.t_p)):
-            weights[sorted_idx[i]] = weights[sorted_idx[i]] * self.t_p[i][1]
+            sns.set(context = 'paper')
+            '''hc = ["#BF1D00", "#9F3726",'#7F524C', '#3F8798',"#1FA2BE", "#00BDE5"]
+            z = np.random.choice(idx, size = int(len(idx) * .5), replace = False)   
+            g = sns.rugplot(z, height = 1, axis = 'x', color = hc[0], lw = .5, alpha = .5)
+            g.set(xlabel = 'Neuron #')
+            g.set(xlim=(0, self.neurons_wm))'''
+            '''
+            sp  = sns.scatterplot(idx, idx2, color ='r')
+            sp.set(xlim = (0,1500), ylim = (0,1500), xlabel = 'Neuron', ylabel = 'Neuron')
+            plt.show()'''
+            
+        for i in range(len(self.t_p) - 1):
+            idx = idx[:int(np.ceil(((self.neurons_wm ** 2) * self.t_p[i][0])/(len(idx2))))]
+            sorted_idx.append(idx)
+        print('Degrading weights...')
+        sums = 0
+        for i in range(len(self.t_p) - 1):
+            for j in range(len(sorted_idx[i])):
+                for k in range(len(idx2)):
+                    weights[sorted_idx[i][j]][idx2[k]] = weights[sorted_idx[i][j]][idx2[k]] * self.t_p[i][1]
+                    sums += 1
             if self.trial == 0:
                 print ('Transmission = %s, proportion = %s'%(self.t_p[i][1],self.t_p[i][0]))
                 #print(weights[sorted_idx[i]].shape)
+        a = sns.distplot(weights, color = 'r')
+        a.set(ylim = (0,100000))
+        plt.savefig('dist_%s.png'%(self.day),bbox_inches='tight', dpi = 300)
+        '''sample = weights[::8, ::8]
+        sample = np.abs(sample)
+        sample[:, [-1]] = normalize(sample[:, -1, None], norm='max', axis=0)
+        plt.rcParams["axes.grid"] = False
+        fig, ax = plt.subplots()
+        cmap = get_cmap('inferno')
+        cmap.set_over('#f9fc9c')
+        cmap.set_bad('#290a5b')
+        cmap.set_under('#290a5b')
+        for param in ['figure.facecolor', 'axes.facecolor', 'savefig.facecolor']:
+            plt.rcParams[param] = '#212946'  # bluish dark grey
+        im = ax.imshow(sample, norm=matplotlib.colors.LogNorm(vmin=0.000000001, vmax = .00001), cmap = cmap)
+        fig.colorbar(im,ax=ax)
+        ax.set_title('Day %s'%(self.day))
+        fig.savefig('heatmap day %s.png'%(self.day),bbox_inches='tight', dpi = 300)'''
         return weights
-    
+
     def run(self, params):
         self.decision_type = params[0]
         self.drug_type = params[1]
@@ -201,22 +235,13 @@ class working_memory_model():
             rc.set("decoder_cache", "enabled", "False") #don't try to remember old decoders
         else:
             rc.set("decoder_cache", "enabled", "True")
-        '''
-        devices = []
-        platform = cl.get_platforms()[0]
-        devices.append(platform.get_devices()[0])
-        ctx = cl.Context(devices)
-        print ('Set OpenCL Context...')
-        '''
+
         with nengo.Network(seed = self.net_seed) as model:
             wm = nengo.Ensemble(self.neurons_wm, 2, neuron_type = self.neuron_type,seed = self.ens_seed, label = 'Working Memory')
             self.wm_recurrent = nengo.Connection(wm, wm, synapse = self.tau_wm, function = self.wm_recurrent_function, seed = self.con_seed, 
                                                  solver = nengo.solvers.LstsqL2(weights=True))
-
-
         with nengo.Simulator(model,dt = self.dt, seed = self.sim_seed) as sim:
             pass
-        
         weights = self.degrade_synaptic_connection(sim, wm)
         
         with nengo.Network(seed = self.net_seed) as model:
@@ -227,7 +252,7 @@ class working_memory_model():
             noise_decision_node = nengo.Node(output = self.noise_decision_function, label = 'Noise injection (decision node)')
             wm = nengo.Ensemble(self.neurons_wm, 2, neuron_type = self.neuron_type,seed = self.ens_seed, label = 'Working Memory')
             cor = nengo.Ensemble(1, 1, neuron_type = nengo.Direct(),seed = self.ens_seed, label = 'Accuracy sensor')
-            
+            dbs = nengo.Node(output = self.DBS_function,label = 'Deep Brain Stimulation Node', size_out=1)
             if self.decision_type == 'default':
                 decision = nengo.Ensemble(self.neurons_decide, 2, seed = self.ens_seed, label = 'Decision Maker')
                 
@@ -238,7 +263,7 @@ class working_memory_model():
                 temp = nengo.Ensemble(self.neurons_decide, 2,neuron_type = self.neuron_type, seed = self.ens_seed)
                 bias = nengo.Node([1] * 2, label = 'bias node')
             output = nengo.Ensemble(self.neurons_decide, 1, neuron_type = self.neuron_type, seed = self.ens_seed, label = 'Output')
-            
+        
             
             nengo.Connection(cue, inputs[0], synapse = None, seed = self.con_seed)
             nengo.Connection(time, inputs[1], synapse = None, seed = self.con_seed)
@@ -246,6 +271,9 @@ class working_memory_model():
             self.wm_recurrent = nengo.Connection(wm.neurons, wm.neurons, synapse = self.tau_wm, seed = self.con_seed, transform = weights)
             nengo.Connection(noise_wm_node, wm.neurons, synapse = self.tau_wm, transform = np.ones((self.neurons_wm,1)) * self.tau_wm, seed = self.con_seed)
             
+            if self.DBS:
+                nengo.Connection(dbs, wm.neurons, synapse = 0, seed = self.con_seed, transform = np.ones((self.neurons_wm,1)))
+
             if self.decision_type == 'default':
                 wm_to_decision = nengo.Connection(wm[0], decision[0], synapse = self.tau, seed = self.con_seed)
                 nengo.Connection(noise_decision_node, decision[1], synapse = None, seed = self.con_seed)
@@ -260,8 +288,8 @@ class working_memory_model():
                 nengo.Connection(bias, decision.input, synapse = self.tau, seed = self.con_seed)
                 nengo.Connection(decision.input, decision.output, transform=(np.eye(2)-1), synapse = self.tau/2.0, seed = self.con_seed)
                 nengo.Connection(decision.output,temp, seed = self.con_seed)
-                nengo.Connection(temp,output,function = self.decision_function, seed = self.con_seed)
-                nengo.Connection(temp, cor, synapse = self.tau,function = self.f_dec, seed = self.con_seed)
+                nengo.Connection(temp,output,function = self.decision_function, seed = self.con_seed, synapse = None)
+                nengo.Connection(temp, cor, synapse = 0.2,seed = self.con_seed, function = self.f_dec)
             
             probe_wm = nengo.Probe(wm[0],synapse = 0.024, sample_every = self.dt_sample)
             probe_spikes = nengo.Probe(wm.neurons, 'spikes', sample_every = self.dt_sample)
@@ -286,6 +314,7 @@ class working_memory_model():
     def multiprocessing(self):
         print("\nDay = %s, trials = %s,..." %(self.day,self.n_trials))
         pool = pathos.multiprocessing.ProcessingPool()
+        freeze_support()
         exp_params = []
         for drug in self.drugs:
             for trial in self.trials:
@@ -375,8 +404,7 @@ class working_memory_model():
         
         return primary_dataframe, firing_dataframe, self.df_correct
 
-
-
 if __name__ == '__main__':
-    n = working_memory_model(day = 0)
-    n.go()
+    a = working_memory_model(transmission_proportion=[[0.05607450486603623, 0.0], [0.010180959787289263, 0.4338728679641582], [0.008689042024563994, 0.5551691077625127], [0.00864204162692773, 0.6757675862041994], [0.008285658627653694, 0.8012765861052439], [0.007596906695402993, 0.9255125029748694], [0.8995308863721255, 1.0]])
+    a.go()
+    

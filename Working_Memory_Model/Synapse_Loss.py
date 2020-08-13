@@ -3,7 +3,7 @@ Created on Sat Aug  8 14:06:31 2020
 
 @author: vivekchari
 """
-def calculate(neurons = 1500, day_step_size = 5, tot_days = 2500, gimme_days = False, gimme_frames = False, export = False):
+def calculate(synapses = 2250000, day_step_size = 5, tot_days = 5000, gimme_days = False, gimme_frames = False, export = False):
     import math
     import pandas as pd
     import numpy as np
@@ -11,7 +11,7 @@ def calculate(neurons = 1500, day_step_size = 5, tot_days = 2500, gimme_days = F
     #This is a synapse loss function DESCRIBE MORE
     #For the data file, in each value, the first value of the list is the proportion of cells in the circuit affected by that group and the second is the synaptic transmission for each of them
     #Variables
-    neurons = neurons #Total number of neurons in the system
+    neurons = synapses #Total number of neurons in the system
     day_step_size = day_step_size #How often do you want to simulate the model in days
     tot_days = tot_days #Total number of days you want to run for - here 0 - 1000 inclusive
     total_steps = tot_days / day_step_size
@@ -25,7 +25,7 @@ def calculate(neurons = 1500, day_step_size = 5, tot_days = 2500, gimme_days = F
     
     #This is the initial probability function that DOES NOT account for the previous number affected
     def prob(t):
-    	probability_aff = (0.001 + (0.000001*t))
+    	probability_aff = (0.0001 + (0.000001*t))
     	return probability_aff
     
     prev_num_affected = 0
@@ -110,9 +110,12 @@ def calculate(neurons = 1500, day_step_size = 5, tot_days = 2500, gimme_days = F
     
     	#Move everything over by one
     	number_transfers = list_new_affected[step]
-    	L0[0] -= number_transfers
-    
-    	L1.insert(0, number_transfers)
+    	if (L0[0] - number_transfers) < 0:
+    		L0[0] = 0
+    		L1.insert(0, 0)
+    	else:
+    		L0[0] -= number_transfers
+    		L1.insert(0, number_transfers)
     	if len(L1) > 5:
     		next_level = L1.pop(-1)
     		L2.insert(0, next_level)
@@ -152,5 +155,12 @@ def isNaN(num):
     
 if __name__ == '__main__':
     print (calculate(gimme_frames= True, export = True))
+
+
+
+
+
+
+
 
     
